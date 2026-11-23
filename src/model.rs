@@ -1,13 +1,25 @@
+//! Model Layer containing core entities for the dataset.
+//!
+//! Defines [`LakeSpeciesRecord`] object mapped to the columns of the source CSV dataset.
+
 use std::fmt;
 
-/// Model / Entity Object matching the dataset columns
+/// Represents a single diatom species observation recorded in a lake sample.
+///
+/// Each field corresponds to a column in the source dataset
 #[derive(Debug, Clone)]
 pub struct LakeSpeciesRecord {
+    /// Unique numeric row identifier (`Identification`).
     pub identification: u32,
+    /// Code identifying the sampled lake (`Lake identification`).
     pub lake_identification: String,
+    /// Calendar year the sample was collected (`Year`).
     pub year: u16,
+    /// Six-letter shorthand taxonomic code (`Species code`).
     pub species_code: String,
+    /// Full scientific species name (`Species`).
     pub species: String,
+    /// Relative percentage abundance of the species in the sample (`Percent abundance`).
     pub percent_abundance: f64,
 }
 
@@ -25,3 +37,4 @@ impl fmt::Display for LakeSpeciesRecord {
         )
     }
 }
+
