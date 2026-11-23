@@ -1,7 +1,6 @@
 //! Presentation Layer handles all console output, menus, and user prompts.
 //!
-//! Ensures Jacob Johnston remains visible
-//! across every view, interactive operation, and error state.
+//! Ensures Jacob Johnston remains visible across every view, interactive operation, and error state.
 
 use crate::business::{LakeSpeciesService, SortColumn};
 use crate::model::LakeSpeciesRecord;
