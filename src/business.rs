@@ -1,6 +1,18 @@
 use crate::model::LakeSpeciesRecord;
 use crate::persistence::CsvRepository;
+use std::cmp::Ordering;
 use std::error::Error;
+
+/// Represents the dataset columns available for sorting
+#[derive(Debug, Clone, Copy)]
+pub enum SortColumn {
+    Identification,
+    LakeIdentification,
+    Year,
+    SpeciesCode,
+    Species,
+    PercentAbundance,
+}
 
 pub struct LakeSpeciesService {
     /// Sequential data structure stored in memory within the Business Layer
@@ -69,4 +81,25 @@ impl LakeSpeciesService {
             Err(format!("Record index {} is out of bounds.", index + 1))
         }
     }
+
+    /// Sorts the in-memory Vec<LakeSpeciesRecord> in place based on a single dataset column
+    pub fn sort_records(&mut self, column: SortColumn, ascending: bool) {
+        self.records.sort_by(|a, b| {
+            let ord: Ordering = match column {
+                SortColumn::Identification => a.identification.cmp(&b.identification),
+                SortColumn::LakeIdentification => a.lake_identification.cmp(&b.lake_identification),
+                SortColumn::Year => a.year.cmp(&b.year),
+                SortColumn::SpeciesCode => a.species_code.cmp(&b.species_code),
+                SortColumn::Species => a.species.cmp(&b.species),
+                SortColumn::PercentAbundance => a.percent_abundance.total_cmp(&b.percent_abundance),
+            };
+
+            if ascending {
+                ord
+            } else {
+                ord.reverse()
+            }
+        });
+    }
 }
+
