@@ -1,257 +1,149 @@
-    fn handle_edit_record(service: &mut LakeSpeciesService) {
-        let total = service.get_all_records().len();
-        if total == 0 {
-            println!("\n[Info] No records in memory to edit.");
-            return;
-        }
+//! Business Layer mananges record
+//!
+//! Holds the [`Vec<LakeSpeciesRecord>`] container in memory and coordinates
+//! handlesCRUD operations, sorting algorithms, dataset reloading, and CSV persistence.
 
-        Self::show_author_banner();
-        println!("--- Edit Existing Record (1 to {}) ---", total);
-        let idx = match Self::prompt_record_index(total) {
-            Some(i) => i,
-            None => return,
-        };
+use crate::model::LakeSpeciesRecord;
+use crate::persistence::CsvRepository;
+use std::cmp::Ordering;
+use std::error::Error;
 
-        let current = service.get_record_by_index(idx).unwrap().clone();
-        println!("\nCurrent Record [#{}]:\n  {}", idx + 1, current);
-        println!("(Press Enter to keep the current value for any field)\n");
+/// Identifies which dataset column to use when sorting records in memory.
+#[derive(Debug, Clone, Copy)]
+pub enum SortColumn {
+    /// Sort by number in `Identification`.
+    Identification,
+    /// Sort by letter in `Lake identification`.
+    LakeIdentification,
+    /// Sort year  in `Year`.
+    Year,
+    /// Sort by letter  in `Species code`.
+    SpeciesCode,
+    /// Sort by letter in scientific `Species` name.
+    Species,
+    /// Sort by number by `Percent abundance`.
+    PercentAbundance,
+}
 
-        let id_input = Self::prompt_line(&format!("Identification [{}]: ", current.identification));
-        let identification = if id_input.is_empty() {
-            current.identification
-        } else {
-            match id_input.parse() {
-                Ok(v) => v,
-                Err(_) => {
-                    println!("[Error] Invalid number. Edit cancelled.");
-                    return;
-                }
-            }
-        };
+/// Service handles record collection and business rules.
+pub struct LakeSpeciesService {
+    /// Sequential data structure holding loaded records in memory.
+    records: Vec<LakeSpeciesRecord>,
+    /// Persistence repository used for reading and writing CSV files.
+    repository: CsvRepository,
+    /// Maximum number of initial records to load on startup or reload.
+    record_limit: usize,
+}
 
-        let lake_input = Self::prompt_line(&format!(
-            "Lake identification [{}]: ",
-            current.lake_identification
-        ));
-        let lake_identification = if lake_input.is_empty() {
-            current.lake_identification
-        } else {
-            lake_input
-        };
-
-        let year_input = Self::prompt_line(&format!("Year [{}]: ", current.year));
-        let year = if year_input.is_empty() {
-            current.year
-        } else {
-            match year_input.parse() {
-                Ok(v) => v,
-                Err(_) => {
-                    println!("[Error] Invalid year. Edit cancelled.");
-                    return;
-                }
-            }
-        };
-
-        let code_input = Self::prompt_line(&format!("Species code [{}]: ", current.species_code));
-        let species_code = if code_input.is_empty() {
-            current.species_code
-        } else {
-            code_input
-        };
-
-        let species_input = Self::prompt_line(&format!("Species [{}]: ", current.species));
-        let species = if species_input.is_empty() {
-            current.species
-        } else {
-            species_input
-        };
-
-        let abund_input = Self::prompt_line(&format!(
-            "Percent abundance [{}]: ",
-            current.percent_abundance
-        ));
-        let percent_abundance = if abund_input.is_empty() {
-            current.percent_abundance
-        } else {
-            match abund_input.parse() {
-                Ok(v) => v,
-                Err(_) => {
-                    println!("[Error] Invalid percent abundance. Edit cancelled.");
-                    return;
-                }
-            }
-        };
-
-        let updated = LakeSpeciesRecord {
-            identification,
-            lake_identification,
-            year,
-            species_code,
-            species,
-            percent_abundance,
-        };
-
-        match service.update_record(idx, updated.clone()) {
-            Ok(()) => {
-                println!("\n[Success] Record #{} updated to:", idx + 1);
-                println!("  {}", updated);
-            }
-            Err(e) => println!("[Error] {}", e),
+impl LakeSpeciesService {
+    /// Creates a new [`LakeSpeciesService`]
+    ///
+    /// # Arguments
+    /// * `repository` - The instance used for File-I/O.
+    /// * `record_limit` - Maximum number of records allowed
+    pub fn new(repository: CsvRepository, record_limit: usize) -> Self {
+        Self {
+            records: Vec::new(),
+            repository,
+            record_limit,
         }
     }
 
-    /// Prompts the user to select and delete a record from memory
-    fn handle_delete_record(service: &mut LakeSpeciesService) {
-        let total = service.get_all_records().len();
-        if total == 0 {
-            println!("\n[Info] No records in memory to delete.");
-            return;
+    /// Initializes the collection on startup 
+    ///
+    /// # Errors
+    /// Returns an error if the dataset file is missing
+    pub fn initialize_records(&mut self) -> Result<(), Box<dyn Error>> {
+        self.reload_records()
+    }
+
+    /// Reloads  records from disk
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened
+    /// remains intact if loading fails.
+    pub fn reload_records(&mut self) -> Result<(), Box<dyn Error>> {
+        let fresh_records = self.repository.fetch_records(self.record_limit)?;
+        self.records.clear();
+        self.records = fresh_records;
+        Ok(())
+    }
+
+    /// Persists all current in-memory records to a new CSV file named with a generated UUID.
+    ///
+    /// # Returns
+    /// The `<uuid>.csv` filename on success.
+    ///
+    /// # Errors
+    /// Returns an error if the output file cannot be created or written
+    pub fn persist_to_new_csv(&self) -> Result<String, Box<dyn Error>> {
+        self.repository.save_records_with_uuid(&self.records)
+    }
+
+    /// Returns a read-only slice of all [`LakeSpeciesRecord`] items.
+    pub fn get_all_records(&self) -> &[LakeSpeciesRecord] {
+        &self.records
+    }
+
+    /// Retrieves a reference to a single record by its 0-based `index`, or `None` if out of bounds.
+    pub fn get_record_by_index(&self, index: usize) -> Option<&LakeSpeciesRecord> {
+        self.records.get(index)
+    }
+
+    /// Appends a new [`LakeSpeciesRecord`] to the end of the in-memory sequential list.
+    pub fn create_record(&mut self, record: LakeSpeciesRecord) {
+        self.records.push(record);
+    }
+
+    /// Replaces an existing record at the given 0-based `index` with `updated`.
+    ///
+    /// # Errors
+    /// Returns an `Err` message if `index` exceeds the current number of records.
+    pub fn update_record(&mut self, index: usize, updated: LakeSpeciesRecord) -> Result<(), String> {
+        if let Some(target) = self.records.get_mut(index) {
+            *target = updated;
+            Ok(())
+        } else {
+            Err(format!("Record index {} is out of bounds.", index + 1))
         }
+    }
 
-        Self::show_author_banner();
-        println!("--- Delete Record (1 to {}) ---", total);
-        let idx = match Self::prompt_record_index(total) {
-            Some(i) => i,
-            None => return,
-        };
+    /// Removes and returns the record at the given 0-based `index`.
+    ///
+    /// # Errors
+    /// Returns an `Err` message if `index` is out of bounds.
+    pub fn delete_record(&mut self, index: usize) -> Result<LakeSpeciesRecord, String> {
+        if index < self.records.len() {
+            Ok(self.records.remove(index))
+        } else {
+            Err(format!("Record index {} is out of bounds.", index + 1))
+        }
+    }
 
-        if let Some(target) = service.get_record_by_index(idx) {
-            println!("\nSelected Record [#{}]:\n  {}", idx + 1, target);
-            let confirm = Self::prompt_line("Are you sure you want to delete this record? (y/n): ");
-            if confirm.eq_ignore_ascii_case("y") {
-                match service.delete_record(idx) {
-                    Ok(removed) => println!("\n[Success] Deleted record: {}", removed),
-                    Err(e) => println!("[Error] {}", e),
-                }
+    /// Sorts the in-memory [`Vec<LakeSpeciesRecord>`] in place by the chosen [`SortColumn`].
+    ///
+    /// # Arguments
+    /// * `column` - The dataset column to sort by.
+    /// * `ascending` - `true` for ascending order (`A -> Z`, `0 -> 100`), `false` for descending.
+    pub fn sort_records(&mut self, column: SortColumn, ascending: bool) {
+        self.records.sort_by(|a, b| {
+            let ord: Ordering = match column {
+                SortColumn::Identification => a.identification.cmp(&b.identification),
+                SortColumn::LakeIdentification => a.lake_identification.cmp(&b.lake_identification),
+                SortColumn::Year => a.year.cmp(&b.year),
+                SortColumn::SpeciesCode => a.species_code.cmp(&b.species_code),
+                SortColumn::Species => a.species.cmp(&b.species),
+                SortColumn::PercentAbundance => a.percent_abundance.total_cmp(&b.percent_abundance),
+            };
+
+            if ascending {
+                ord
             } else {
-                println!("\n[Cancelled] Record was not deleted.");
+                ord.reverse()
             }
-        }
-    }
-
-    fn handle_reload(service: &mut LakeSpeciesService, dataset_path: &str) {
-        println!("\nReloading dataset from '{}'...", dataset_path);
-        match service.reload_records() {
-            Ok(()) => {
-                println!(
-                    "[Success] In-memory data replaced with {} freshly loaded records.",
-                    service.get_all_records().len()
-                );
-            }
-            Err(err) => {
-                Self::display_error(dataset_path, &err);
-                println!("Existing in-memory data was preserved.");
-            }
-        }
-    }
-
-    fn handle_persist(service: &LakeSpeciesService) {
-        println!(
-            "\nPersisting {} records to a new UUID CSV file...",
-            service.get_all_records().len()
-        );
-        match service.persist_to_new_csv() {
-            Ok(filename) => {
-                println!(
-                    "[Success] Saved {} records to '{}'.",
-                    service.get_all_records().len(),
-                    filename
-                );
-            }
-            Err(err) => {
-                eprintln!("[Persistence Error] Failed to write output CSV file: {}", err);
-            }
-        }
-    }
-
-
-    fn handle_sort_records(service: &mut LakeSpeciesService) {
-        if service.get_all_records().is_empty() {
-            println!("\n[Info] No records in memory to sort.");
-            return;
-        }
-
-        Self::show_author_banner();
-        println!("--- Sort Records by Column ---");
-        println!("  1. Identification");
-        println!("  2. Lake identification");
-        println!("  3. Year");
-        println!("  4. Species code");
-        println!("  5. Species");
-        println!("  6. Percent abundance");
-
-        let col_choice = Self::prompt_line("\nSelect column to sort by (1-6): ");
-        let (column, col_name) = match col_choice.as_str() {
-            "1" => (SortColumn::Identification, "Identification"),
-            "2" => (SortColumn::LakeIdentification, "Lake identification"),
-            "3" => (SortColumn::Year, "Year"),
-            "4" => (SortColumn::SpeciesCode, "Species code"),
-            "5" => (SortColumn::Species, "Species"),
-            "6" => (SortColumn::PercentAbundance, "Percent abundance"),
-            _ => {
-                println!("[Error] Invalid column selection. Sort cancelled.");
-                return;
-            }
-        };
-
-        let order_choice = Self::prompt_line("Sort order — (A)scending or (D)escending? [A/D]: ");
-        let (ascending, order_label) = if order_choice.eq_ignore_ascii_case("d") {
-            (false, "Descending")
-        } else if order_choice.eq_ignore_ascii_case("a") || order_choice.is_empty() {
-            (true, "Ascending")
-        } else {
-            println!("[Error] Invalid sort order. Use 'A' or 'D'. Sort cancelled.");
-            return;
-        };
-
-        service.sort_records(column, ascending);
-        println!(
-            "\n[Success] Sorted {} records by '{}' ({}).",
-            service.get_all_records().len(),
-            col_name,
-            order_label
-        );
-        Self::display_record_slice(service.get_all_records(), 0);
-    }
-
-    fn prompt_record_index(total: usize) -> Option<usize> {
-        let input = Self::prompt_line(&format!("Enter record number (1-{}): ", total));
-        match input.parse::<usize>() {
-            Ok(num) if num >= 1 && num <= total => Some(num - 1),
-            _ => {
-                println!("[Error] Invalid record number. Must be between 1 and {}.", total);
-                None
-            }
-        }
-    }
-    fn prompt_line(prompt: &str) -> String {
-        print!("{}", prompt);
-        io::stdout().flush().ok();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).ok();
-        input.trim().to_string()
-    }
-
-    pub fn display_error(file_path: &str, err: &Box<dyn Error>) {
-        if let Some(io_err) = err.downcast_ref::<io::Error>() {
-            match io_err.kind() {
-                io::ErrorKind::NotFound => {
-                    eprintln!("\n[File Error] The file '{}' was not found.", file_path);
-                }
-                io::ErrorKind::PermissionDenied => {
-                    eprintln!("\n[File Error] Permission denied when opening '{}'.", file_path);
-                }
-                _ => {
-                    eprintln!("\n[I/O Error] Failed to read '{}': {}", file_path, io_err);
-                }
-            }
-        } else {
-            eprintln!("\n[Data Error] {}", err);
-        }
-        println!("------------------------------------------------------------------------------------------");
-        println!("Program Author: {}", AUTHOR_NAME);
-        println!("==========================================================================================");
+        });
     }
 }
+
 
 
